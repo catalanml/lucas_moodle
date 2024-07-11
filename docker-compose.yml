@@ -4,36 +4,29 @@ services:
   # Aplicación
   app:
     image: tianon/true
-      # Uncomment following lines and modify path for CUSTOM_CA
-      # - /usr/local/share/ca-certificates/overcloud-cacert-mo.crt:/usr/local/share/ca-certificates/custom-ca.crt
-    depends_on:
-      downloader:
-        condition: service_healthy
+    # Uncomment following lines and modify path for CUSTOM_CA
+    # - /usr/local/share/ca-certificates/overcloud-cacert-mo.crt:/usr/local/share/ca-certificates/custom-ca.crt
     volumes_from:
       - downloader
+
   # Nuevo servicio para descargar archivos
   downloader:
     image: alpine:latest # Usamos una imagen ligera de Alpine Linux
     command: >
-      /bin/sh -c "apk add --no-cache curl unzip && \
+      /bin/sh -c "apk add --no-cache wget unzip rsync && \
                 if [ ! -e /var/www/done ]; then \
-                  curl -o /var/www/html.zip https://download.moodle.org/download.php/direct/stable401/moodle-4.1.11.zip && \
-                  unzip -n /var/www/html.zip -d /var/www/ && \
-                  rm /var/www/html.zip && \
-                  touch /var/www/done; \
+                  wget -O /var/www/html.zip https://download.moodle.org/download.php/direct/stable401/moodle-4.1.11.zip && \
+                  unzip /var/www/html.zip -d /var/www/ && \
+                  touch /var/www/done ; \
                 fi && \
                   tail -f /dev/null"
-    healthcheck:
-      test: [ "CMD", "stat", "/var/www/done" ]
-      interval: 10s
-      timeout: 3s
-      retries: 99999
     volumes:
       - ./${REPO_FOLDER}:${DOCUMENT_ROOT}
       - ./moodledata:${MOODLE_DATA}
+
   # Servicio de postgres:
   postgres:
-    image: "moodledev/postgres:13-${PG_LOCALE}"
+    image: "postgres:14"
     build:
       context: ./postgres
       args:
@@ -54,69 +47,39 @@ services:
       - app
 
   # Servicio de PHP-FPM
-  php-fpm:
-    image: "moodledev/php:8.0-fpm"
+  php:
+    image: "oberonamsterdam/php:8.1-fpm"
+    restart: always
     build:
       context: ./php-fpm
-      args:
-        - DOCUMENT_ROOT
-        - MY_TZ
-    environment:
-      - XDEBUG_CONFIG=idekey=PHPTEST
-      - PHP_IDE_CONFIG=serverName=localhost
-      - DOCUMENT_ROOT
-      - POSTGRES_DB
-      - POSTGRES_USER
-      - POSTGRES_PASSWORD
-      - MOODLE_DATA
-      - WWWROOT
-      - WWW_PORT
-      # Uncomment following lines and modify variable content for CUSTOM_CA
-      # - |-
-      #   CA_CERT=-----BEGIN CERTIFICATE-----
-      #   REPLACE_CA_CONTENT
-      #   -----END CERTIFICATE-----
-    volumes_from:
-      - app
     volumes:
-      - ./log:/var/log/shared:z
-    expose:
-      - "${PHP_SOCKET}"
-    links:
-      - postgres
-    depends_on:
-      - postgres
+      - ./${REPO_FOLDER}:${DOCUMENT_ROOT}
+      - ./moodledata:${MOODLE_DATA}
 
   # Servicio de Apache2
-  apache2:
-    image: moodledev/apache2:2.4
+  web:
+    image: oberonamsterdam/apache24-fpm
+    restart: always
     build:
       context: ./apache2
       args:
         DOCUMENT_ROOT: ${DOCUMENT_ROOT}
-        PHP_SOCKET: php-fpm:${PHP_SOCKET}
+        PHP_SOCKET: php:${PHP_SOCKET}
         ALIAS_DOMAIN: ${ALIAS_DOMAIN}
+    environment:
+      - "VIRTUAL_HOST=localhost"
+      - "APACHE_DOCUMENTROOT=/var/www/moodle"
+      - "PHP_FPM_PORT=9000"
     volumes_from:
       - app
+    volumes:
+            - ./apache2/myconfiguration.conf:/usr/local/apache2/conf/other/myconfiguration.conf
     ports:
       - "${IP}:${WWW_PORT}:80"
     links:
-      - php-fpm
-      - postgres
+      - php
     depends_on:
-      - php-fpm
-
-  # Cron para moodle
-  cron:
-    image: moodledev/php:8.0-fpm-cron
-    build:
-      context: ./cron
-      args:
-        DOCUMENT_ROOT: ${DOCUMENT_ROOT}
-    volumes_from:
-      - app
-    depends_on:
-      - apache2
+      - php
 
   # Gestor de base de datos
   pgadmin:
@@ -144,6 +107,12 @@ services:
       - postgres
     depends_on:
       - postgres
+
 volumes:
   postgres-data:
     driver: "local"
+    
+
+networks:
+  default:
+    # No ipv6 configuration here
